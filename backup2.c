@@ -83,12 +83,6 @@ void create_task_file() {
  * S’il n’existe pas, créer le répertoire /tmp/tasks.
 */
 void create_task_dir() {
-    struct stat st;
-    if (stat(TASK_DIR, &st) == 0 && S_ISDIR(st.st_mode)) {
-        // Directory already exists
-        return;
-    }
-
     if (mkdir(TASK_DIR, 0777) == -1) {
         perror("mkdir");
         exit(1);
@@ -109,8 +103,6 @@ typedef struct {
     char* cmd;
 } Task;
 
-Task task; // Déclaration globale de la tâche courante
-
 /*
  * Définir un tableau dynamique pour la liste des commandes à exécuter avec les opérations suivantes :
     * - Ajouter une commande à la liste
@@ -125,17 +117,6 @@ typedef struct {
 } TaskList;
 
 TaskList task_list; // Déclaration globale de la liste des tâches
-
-/**
- * @brief Initialize a Task
- * @param task The task to initialize
-*/
-void init_task(Task* task) {
-    task->num_cmd = 1;
-    task->start = 0;
-    task->period = 0;
-    task->cmd = NULL;
-}
 
 /**
  * @brief Initialize a TaskList
@@ -196,13 +177,12 @@ Task get_next_task(TaskList* list, int index) {
  * @param list The list to free
  * @param free_tasks Whether to free the tasks
 */
-void free_task_list() {
-     if (task_list.tasks != NULL) {
-        for (int i = 0; i < task_list.size; i++) {
-            free(task_list.tasks[i].cmd);
-        }
-        free(task_list.tasks);
+void free_task_list(TaskList* list) {
+    if (list->tasks != NULL) {
+        free(list->tasks);
     }
+    list->size = 0;
+    list->capacity = 0;
 }
 
 /**
@@ -283,7 +263,7 @@ void read_command(TaskList* list, Task* task) {
     // Utiliser les fonctions de libmessage.so pour lire les informations (send_string, send_argv, recv_string, recv_argv) de la commande envoyée par l’outil taskcli.
 
     // num_cmd is incremented by 1 every time a task is added to the list
-    task->num_cmd = list->size + 1;
+    task->num_cmd = list->size;
 
     // Receive start time
     char* start_str = recv_string(fd);
@@ -347,47 +327,6 @@ void execute_tasks(TaskList* list, Task* task) {
         perror("fork");
         exit(EXIT_FAILURE);
     } else if (pid == 0) {
-        // Redirect standard input to /dev/null
-        int dev_null = open("/dev/null", O_RDONLY);
-        if (dev_null == -1) {
-            perror("open");
-            exit(EXIT_FAILURE);
-        }
-        if (dup2(dev_null, STDIN_FILENO) == -1) {
-            perror("dup2");
-            exit(EXIT_FAILURE);
-        }
-        close(dev_null);
-
-        // Redirect standard output to /tmp/tasks/X.out
-        char out_file[PATH_MAX];
-        snprintf(out_file, sizeof(out_file), "/tmp/tasks/%d.out", task->num_cmd);
-        int out_fd = open(out_file, O_CREAT | O_WRONLY | O_APPEND, 0644);
-        if (out_fd == -1) {
-            perror("open");
-            exit(EXIT_FAILURE);
-        }
-        if (dup2(out_fd, STDOUT_FILENO) == -1) {
-            perror("dup2");
-            exit(EXIT_FAILURE);
-        }
-        close(out_fd);
-
-        // Redirect standard error to /tmp/tasks/X.err
-        char err_file[PATH_MAX];
-        snprintf(err_file, sizeof(err_file), "/tmp/tasks/%d.err", task->num_cmd);
-        int err_fd = open(err_file, O_CREAT | O_WRONLY | O_APPEND, 0644);
-        if (err_fd == -1) {
-            perror("open");
-            exit(EXIT_FAILURE);
-        }
-        if (dup2(err_fd, STDERR_FILENO) == -1) {
-            perror("dup2");
-            exit(EXIT_FAILURE);
-        }
-        close(err_fd);
-
-        // Parse command and arguments
         char* cmd = strtok(task->cmd, " ");
         int max_args = 10;
         char** args = malloc((max_args + 1) * sizeof(char*));
@@ -412,7 +351,6 @@ void execute_tasks(TaskList* list, Task* task) {
             i++;
         }
         args[i] = NULL;
-        
         execvp(args[0], args);
         perror("execvp");
         free(args);
@@ -426,11 +364,52 @@ void execute_tasks(TaskList* list, Task* task) {
             printf("Task %d killed by signal %d\n\n", task->num_cmd, WTERMSIG(status));
         }
     }
+
+    // // Redirect stdin to /dev/null
+    // int devnull = open("/dev/null", O_WRONLY);
+    // if (devnull == -1) {
+    //     perror("open");
+    //     exit(EXIT_FAILURE);
+    // }
+    // if (dup2(devnull, STDIN_FILENO) == -1) {
+    //     perror("dup2");
+    //     exit(EXIT_FAILURE);
+    // }
+    // close(devnull);
+
+    // // Redirect stdout to /tmp/tasks/<num_cmd>.out
+    // char out_path[PATH_MAX];
+    // snprintf(out_path, sizeof(out_path), "%s/%d.out", TASK_DIR, task->num_cmd);
+    // int out = open(out_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    // if (out == -1) {
+    //     perror("open");
+    //     exit(EXIT_FAILURE);
+    // }
+    // if (dup2(out, STDOUT_FILENO) == -1) {
+    //     perror("dup2");
+    //     exit(EXIT_FAILURE);
+    // }
+    // close(out);
+
+    // // Redirect stderr to /tmp/tasks/<num_cmd>.err
+    // char err_path[PATH_MAX];
+    // snprintf(err_path, sizeof(err_path), "%s/%d.err", TASK_DIR, task->num_cmd);
+    // int err = open(err_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    // if (err == -1) {
+    //     perror("open");
+    //     exit(EXIT_FAILURE);
+    // }
+    // if (dup2(err, STDERR_FILENO) == -1) {
+    //     perror("dup2");
+    //     exit(EXIT_FAILURE);
+    // }
+    // close(err);
 }
 
 /**
- * Make a loop to run through the list of tasks to get the earliest start time and return the time to wait before executing it
- * Exemple : ./taskcli +9 4 pwd ./taskcli +5 10 ls -> return 5 then 9
+ * Run through the list of tasks to get the earliest start time and return the time to wait before executing it
+ * repeat every period seconds after that (if period > 0)
+ * Exemple : ./taskcli +9 4 pwd -> pwd will be executed in 9 seconds and every 4 seconds after that
  * @param list The list of tasks
 */
 void waitForStart(TaskList* list) {
@@ -447,7 +426,7 @@ void waitForStart(TaskList* list) {
             start = task.start;
         }
     }
-    printf("Start alarm set to %ld\n", start);
+    printf("Alarm set to %ld\n", start);
     alarm(start);
 }
 
@@ -495,7 +474,7 @@ int waitForPeriod(TaskList* list, Task* task) {
         execute_tasks(list, task_to_execute);
 
         // reset the alarm
-        printf("Period alarm set to %d\n", task_to_execute->period);
+        printf("Alarm set to %d\n", task_to_execute->period);
         alarm(task_to_execute->period);
         
         return 1;
@@ -540,10 +519,9 @@ void handSIGINT() {
     // Signal handler for SIGINT
     // Cleanup tasks
     printf("Received SIGINT. Terminating...\n");
-    remove_pid();
-
+    remove(PID_FILE);
     // Function to release dynamically allocated memory
-    free_task_list();
+    free_task_list(&task_list);
 
     // Terminate and eliminate remaining child processes
     killpg(getpid(), SIGTERM);
@@ -554,10 +532,9 @@ void handSIGQUIT() {
     // Signal handler for SIGQUIT
     // Cleanup tasks
     printf("Received SIGQUIT. Terminating...\n");
-    remove_pid();
-
+    remove(PID_FILE);
     // Function to release dynamically allocated memory
-    free_task_list();
+    free_task_list(&task_list);
 
     // Terminate and eliminate remaining child processes
     killpg(getpid(), SIGTERM);
@@ -568,37 +545,13 @@ void handSIGTERM() {
     // Signal handler for SIGTERM
     // Cleanup tasks
     printf("Received SIGTERM. Terminating...\n");
-    remove_pid();
-
+    remove(PID_FILE);
     // Function to release dynamically allocated memory
-    free_task_list();
+    free_task_list(&task_list);
 
     // Terminate and eliminate remaining child processes
     killpg(getpid(), SIGTERM);
     exit(0);
-}
-
-void redirect_output(const char *filename, int target_fd) {
-    int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd == -1) {
-        perror("Failed to open file for redirection");
-        exit(1);
-    }
-
-    if (dup2(fd, target_fd) == -1) {
-        perror("Failed to redirect output");
-        exit(1);
-    }
-
-    close(fd);
-}
-
-void redirect_standard_streams() {
-    // Redirect standard output to /tmp/taskd.out
-    redirect_output("/tmp/taskd.out", STDOUT_FILENO);
-
-    // Redirect standard error to /tmp/taskd.err
-    redirect_output("/tmp/taskd.err", STDERR_FILENO);
 }
 
 int main(){
@@ -671,37 +624,21 @@ int main(){
     // Create the file /tmp/tasks.txt
     create_task_file();
 
-    // create the directory /tmp/taskd
+    // //create the directory /tmp/taskd
     create_task_dir();
 
-    // Redirect standard output and standard error to /tmp/taskd.out and /tmp/taskd.err
-    redirect_standard_streams();
-
     // Initialize the structure of tasks and the list of tasks
-    init_task(&task);
+    Task task;
+    task.start = 0;
+    task.period = 0;
+    task.cmd = NULL;
 
     init_task_list(&task_list);
 
-    // Set up the mask of signals to be blocked
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGUSR1);
-    sigaddset(&mask, SIGALRM);
-    sigaddset(&mask, SIGCHLD);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGQUIT);
-    sigaddset(&mask, SIGTERM);
-
-    // Unblock all signals initially
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
-
     // When sigusr1 is received, read the command received from the named pipe
     while (1) {
-        sigset_t old_mask;
-
-        // Block the signals temporarily
-        sigprocmask(SIG_BLOCK, &mask, &old_mask);
-        
+        // Wait for a signal
+        pause();
         if (usr1_receive) {
             // Read the command received from the named pipe
             read_command(&task_list, &task);
@@ -727,12 +664,191 @@ int main(){
 
             alrm_receive = 0;
         }
-
-        // Restore the original mask
-        sigprocmask(SIG_SETMASK, &old_mask, NULL);
-
-        // Wait for a signal using sigsuspend
-        sigsuspend(&old_mask);
     }
-    return 0;
+
+    // // Initialize the list of tasks
+    // TaskList task_list;
+    // init_task_list(&task_list);
+
+    // printf("MAIN5\n");
+
+    // sigset_t mask;
+    // sigemptyset(&mask);
+    // sigaddset(&mask, SIGUSR1);
+    // sigaddset(&mask, SIGALRM);
+
+    // printf("MAIN6\n");
+
+    // // Wait for commands to be received
+    // while (1) {
+    //     // attente de réception d’un signal
+    //     sigsuspend(&mask);
+
+    //     if (usr1_receive) {
+    //         // Read the command received from the named pipe
+    //         read_command(&task_list);
+    //         usr1_receive = 0;
+    //     }
+    // }
+
+    // return 0;
+
+    // printf("MAIN7\n");
+}
+
+
+
+    // while (1) {
+    //     // Read the command received from the named pipe
+    //     read_command();
+
+    //     // If the command is "add", add the task to the list of tasks
+    //     if (strcmp(buf, "add") == 0) {
+    //         // Read the task to be added from the named pipe
+    //         read_command();
+
+    //         // Parse the task to be added
+    //         Task* task = parse_task(buf);
+
+    //         // Add the task to the list of tasks
+    //         add_task(&task_list, task);
+
+    //         // Add the task to the file /tmp/tasks.txt
+    //         add_task_to_file(task);
+    //     }
+
+    //     // If the command is "remove", remove the task from the list of tasks
+    //     if (strcmp(buf, "remove") == 0) {
+    //         // Read the task to be removed from the named pipe
+    //         read_command();
+
+    //         // Parse the task to be removed
+    //         Task* task = parse_task(buf);
+
+    //         // Remove the task from the list of tasks
+    //         remove_task(&task_list, task);
+    //     }
+
+    //     // If the command is "list", list the tasks
+    //     if (strcmp(buf, "list") == 0) {
+    //         // List the tasks
+    //         list_tasks(&task_list);
+    //     }
+
+    //     // If the command is "quit", quit the program
+    //     if (strcmp(buf, "quit") == 0) {
+    //         // Remove the file /tmp/taskd.pid
+    //         remove_pid();
+
+    //         // Quit the program
+    //         exit(0);
+    //     }
+    // }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    void execute_tasks(TaskList* list, Task* task) {
+    // Check if there is a task to execute
+    if (list->size == 0) {
+        printf("No task to execute\n");
+        return;
+    }
+
+    // Execute the task
+    printf("Executing task %d: %s (start: %ld, period: %d)\n", task->num_cmd, task->cmd, task->start, task->period);
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        exit(EXIT_FAILURE);
+    } else if (pid == 0) {
+        char* cmd = strtok(task->cmd, " ");
+        int max_args = 10;
+        char** args = malloc((max_args + 1) * sizeof(char*));
+        if (args == NULL) {
+            perror("malloc");
+            exit(EXIT_FAILURE);
+        }
+        int i = 0;
+        while (cmd != NULL) {
+            if (i >= max_args) {
+                max_args *= 2;  // Double the array size if more arguments are needed
+                char** temp = realloc(args, (max_args + 1) * sizeof(char*));
+                if (temp == NULL) {
+                    perror("realloc");
+                    free(args);
+                    exit(EXIT_FAILURE);
+                }
+                args = temp;
+            }
+            args[i] = cmd;
+            cmd = strtok(NULL, " ");
+            i++;
+        }
+        args[i] = NULL;
+        execvp(args[0], args);
+        perror("execvp");
+        free(args);
+        exit(EXIT_FAILURE);
+    } else {
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status)) {
+            printf("Task %d exited with status %d\n\n", task->num_cmd, WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            printf("Task %d killed by signal %d\n\n", task->num_cmd, WTERMSIG(status));
+        }
+    }
+
+    // Redirect stdin to /dev/null
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(devnull, STDIN_FILENO) == -1) {
+        perror("dup2");
+        exit(EXIT_FAILURE);
+    }
+    close(devnull);
+
+    // Redirect stdout to /tmp/tasks/<num_cmd>.out
+    char out_path[PATH_MAX];
+    snprintf(out_path, sizeof(out_path), "%s/%d.out", TASK_DIR, task->num_cmd);
+    int out = open(out_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (out == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(out, STDOUT_FILENO) == -1) {
+        perror("dup2");
+        exit(EXIT_FAILURE);
+    }
+    close(out);
+
+    // Redirect stderr to /tmp/tasks/<num_cmd>.err
+    char err_path[PATH_MAX];
+    snprintf(err_path, sizeof(err_path), "%s/%d.err", TASK_DIR, task->num_cmd);
+    int err = open(err_path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (err == -1) {
+        perror("open");
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(err, STDERR_FILENO) == -1) {
+        perror("dup2");
+        exit(EXIT_FAILURE);
+    }
+    close(err);
 }

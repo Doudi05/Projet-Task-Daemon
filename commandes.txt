@@ -2,6 +2,16 @@ gcc -Wall -Wextra -std=c99 -o taskd taskd.c -L. -lmessage -g
 
 gcc -Wall -Wextra -std=c99 -o taskcli taskcli.c -L. -lmessage -g
 
-rm /tmp/taskd.pid /tmp/tasks.fifo /tmp/tasks.txt
+rm /tmp/taskd.pid /tmp/tasks.fifo /tmp/tasks.txt && rm -r /tmp/tasks
 
 export LD_LIBRARY_PATH=/mnt/d/WSL/C/ProjetC:$LD_LIBRARY_PATH
+
+cd /mnt/d/WSL/C/ProjetC
+
+valgrind -s --leak-check=full
+
+valgrind -s --leak-check=full --show-leak-kinds=all --track-origins=yes ./taskd
+
+./taskcli +2 3 date
+./taskcli +4 5 ls
+./taskcli +7 9 pwd

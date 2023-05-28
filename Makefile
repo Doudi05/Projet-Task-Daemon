@@ -1,26 +1,24 @@
-#Write a Makefile for taskd, taskcli and libmessage.so that will build the project.
-# remove *.pid files from /tmp
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -pedantic -I. -O2 -g
+LDFLAGS = -L. -lmessage -Wl,-rpath=$(shell pwd) -g
+TARGETS = taskd taskcli
+OBJ_FILES = taskd.o taskcli.o
+LIBRARY = libmessage.so
 
-all: taskd taskcli
+all: $(TARGETS)
 
-taskd: taskd.o libmessage.so
-	gcc -o taskd taskd.o -L. -lmessage -lpthread
+$(TARGETS): % : %.o $(LIBRARY)
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-taskcli: taskcli.o libmessage.so
-	gcc -o taskcli taskcli.o -L. -lmessage -lpthread
+$(LIBRARY): message.o
+	$(CC) -shared -o $@ $^
 
-taskd.o: taskd.c
-	gcc -c taskd.c -o taskd.o -I.
+%.o: %.c
+	$(CC) $(CFLAGS) -c $<
 
-taskcli.o: taskcli.c
-	gcc -c taskcli.c -o taskcli.o -I.
-
-libmessage.so: message.o
-	gcc -shared -o libmessage.so message.o
-
-message.o: message.c
-	gcc -c -fPIC message.c -o message.o -I.
-	
 clean:
-	rm -f *.o *.so taskd taskcli
-	rm -f /tmp/*.pid
+	rm -f $(TARGETS) $(OBJ_FILES) $(LIBRARY) /tmp/taskd.pid /tmp/tasks.fifo /tmp/tasks.txt /tmp/taskd.out /tmp/taskd.err
+	rm -rf /tmp/tasks
+
+mrproper: clean
+	rm -f *~ *.o

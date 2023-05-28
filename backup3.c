@@ -83,12 +83,6 @@ void create_task_file() {
  * S’il n’existe pas, créer le répertoire /tmp/tasks.
 */
 void create_task_dir() {
-    struct stat st;
-    if (stat(TASK_DIR, &st) == 0 && S_ISDIR(st.st_mode)) {
-        // Directory already exists
-        return;
-    }
-
     if (mkdir(TASK_DIR, 0777) == -1) {
         perror("mkdir");
         exit(1);
@@ -447,8 +441,13 @@ void waitForStart(TaskList* list) {
             start = task.start;
         }
     }
-    printf("Start alarm set to %ld\n", start);
+    printf("Alarm set to %ld\n", start);
     alarm(start);
+
+    int remaining_time = start - time(NULL);
+    while (remaining_time > 0) {
+        remaining_time = sleep(remaining_time);
+    }
 }
 
 /**
@@ -495,7 +494,7 @@ int waitForPeriod(TaskList* list, Task* task) {
         execute_tasks(list, task_to_execute);
 
         // reset the alarm
-        printf("Period alarm set to %d\n", task_to_execute->period);
+        printf("Alarm set to %d\n", task_to_execute->period);
         alarm(task_to_execute->period);
         
         return 1;
@@ -578,29 +577,6 @@ void handSIGTERM() {
     exit(0);
 }
 
-void redirect_output(const char *filename, int target_fd) {
-    int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd == -1) {
-        perror("Failed to open file for redirection");
-        exit(1);
-    }
-
-    if (dup2(fd, target_fd) == -1) {
-        perror("Failed to redirect output");
-        exit(1);
-    }
-
-    close(fd);
-}
-
-void redirect_standard_streams() {
-    // Redirect standard output to /tmp/taskd.out
-    redirect_output("/tmp/taskd.out", STDOUT_FILENO);
-
-    // Redirect standard error to /tmp/taskd.err
-    redirect_output("/tmp/taskd.err", STDERR_FILENO);
-}
-
 int main(){
     // Set up the signal handler for SIGUSR1
     struct sigaction sa;
@@ -671,36 +647,32 @@ int main(){
     // Create the file /tmp/tasks.txt
     create_task_file();
 
-    // create the directory /tmp/taskd
+    // //create the directory /tmp/taskd
     create_task_dir();
-
-    // Redirect standard output and standard error to /tmp/taskd.out and /tmp/taskd.err
-    redirect_standard_streams();
 
     // Initialize the structure of tasks and the list of tasks
     init_task(&task);
 
     init_task_list(&task_list);
 
-    // Set up the mask of signals to be blocked
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGUSR1);
-    sigaddset(&mask, SIGALRM);
-    sigaddset(&mask, SIGCHLD);
-    sigaddset(&mask, SIGINT);
-    sigaddset(&mask, SIGQUIT);
-    sigaddset(&mask, SIGTERM);
-
-    // Unblock all signals initially
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
-
     // When sigusr1 is received, read the command received from the named pipe
     while (1) {
-        sigset_t old_mask;
+        // // Create a signal mask
+        // sigset_t signal_set;
+        // sigemptyset(&signal_set);
+        // sigaddset(&signal_set, SIGUSR1);
+        // sigaddset(&signal_set, SIGALRM);
 
-        // Block the signals temporarily
-        sigprocmask(SIG_BLOCK, &mask, &old_mask);
+        // // Unblock expected signals
+        // sigprocmask(SIG_UNBLOCK, &signal_set, NULL);
+
+        // // Wait for a signal atomically
+        // sigsuspend(&signal_set);
+
+        // // Block signals during signal handling
+        // sigprocmask(SIG_BLOCK, &signal_set, NULL);
+
+        pause();
         
         if (usr1_receive) {
             // Read the command received from the named pipe
@@ -722,17 +694,112 @@ int main(){
             // Execute the task and reset the alarm
             waitForPeriod(&task_list, &task);
 
-            // display the list of tasks
-            display_task_list(&task_list);
+            // // display the list of tasks
+            // display_task_list(&task_list);
 
             alrm_receive = 0;
         }
-
-        // Restore the original mask
-        sigprocmask(SIG_SETMASK, &old_mask, NULL);
-
-        // Wait for a signal using sigsuspend
-        sigsuspend(&old_mask);
+        // // Unblock signals for the next iteration
+        // sigprocmask(SIG_UNBLOCK, &signal_set, NULL);
     }
+}
+
+
+
+
+
+
+
+
+
+
+
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+#include <time.h>
+#include <locale.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <string.h>
+#include <signal.h>
+#include <errno.h>
+#include <limits.h>
+#include "message.h"
+
+#define PID_FILE "/tmp/taskd.pid"
+#define FIFO_PATH "/tmp/tasks.fifo"
+#define TASK_FILE "/tmp/tasks.txt"
+#define TASK_DIR "/tmp/tasks"
+
+
+void daemonize() {
+    // Premier fork
+    pid_t pid = fork();
+    
+    if (pid < 0) {
+        // Échec du premier fork
+        perror("Erreur lors de la création du processus fils");
+        exit(1);
+    }
+    else if (pid > 0) {
+        // Processus parent
+        // Attend la fin du processus fils
+        wait(NULL);
+        exit(0);
+    }
+    
+    // Deuxième fork
+    pid = fork();
+    
+    if (pid < 0) {
+        // Échec du deuxième fork
+        perror("Erreur lors de la création du processus petit-fils");
+        exit(1);
+    }
+    else if (pid > 0) {
+        // Processus fils
+        exit(0);
+    }
+    
+    // Petit-fils devenant un daemon
+    // Change le répertoire de travail pour éviter de bloquer des montages
+    chdir("/");
+    
+    // Ferme les descripteurs de fichiers ouverts hérités du parent
+    for (int i = sysconf(_SC_OPEN_MAX); i >= 0; i--) {
+        close(i);
+    }
+    
+    // Redirige les descripteurs de fichiers standard vers /dev/null
+    // pour éviter toute écriture accidentelle
+    freopen("/dev/null", "r", stdin);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
+    
+    // Crée une nouvelle session et devient le leader de session
+    setsid();
+}
+
+int main() {
+    // Appel de la fonction pour daemonizer le processus
+    daemonize();
+    
+    // Le code suivant sera exécuté dans le contexte du daemon
+    
+    // Exemple : boucle infinie pour simuler un travail continu du daemon
+    while (1) {
+        // Faites vos opérations ici
+        
+        // Pause pour éviter une utilisation excessive du CPU
+        sleep(1);
+    }
+    
     return 0;
 }

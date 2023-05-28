@@ -14,6 +14,7 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
+#include <limits.h>
 #include "message.h"
 
 #define PID_FILE "/tmp/taskd.pid"
@@ -49,6 +50,10 @@ void print_usage(char *progname) {
  * Envoyer le signal SIGUSR1 à taskd pour lui indiquer qu’il va devoir lire des données.
 */
 void send_command(int argc, char *argv[]) {
+    time_t start;
+    int period;
+    char *cmd = NULL;
+
     if (argc == 1) {
         // ./taskcli
         // Lire et afficher le contenu du fichier /tmp/tasks.txt en utilisant un verrou consultatif fcntl(2).
@@ -84,50 +89,59 @@ void send_command(int argc, char *argv[]) {
             exit(1);
         }
 
-        printf("passed1\n");
-
         // ./taskcli START PERIOD CMD [ARG]...
         // Déterminer la date de départ et la période en fonction des arguments.
         // Afficher une aide si une erreur est détectée (mauvais nombre d’arguments, arguments erronés).
         char *endptr;
-        time_t start = strtol(argv[1], &endptr, 10);
+        start = strtol(argv[1], &endptr, 10);
         if (*endptr != '\0' || start < 0) {
             fprintf(stderr, "Invalid start time : %s\n", argv[1]);
             print_usage(argv[0]);
             exit(1);
         }
-        int period = strtol(argv[2], &endptr, 10);
+        period = strtol(argv[2], &endptr, 10);
         if (*endptr != '\0' || period < 0) {
             fprintf(stderr, "Invalid period : %s\n", argv[2]);
             print_usage(argv[0]);
             exit(1);
         }
 
-        printf("passed2\n");
+        size_t total_length = 0;
+        for (int i = 3; i < argc; i++) {
+            total_length += strlen(argv[i]) + 1;  // +1 for the space separator
+        }
 
-        char *cmd = argv[3];
-        char **args = argv + 4;
+        // Allocate memory for the concatenated string
+        cmd = malloc(total_length + 1);  // +1 for the null terminator
+        if (cmd == NULL) {
+            fprintf(stderr, "Memory allocation failed\n");
+            exit(1);
+        }
 
+        // Concatenate the arguments into cmd
+        cmd[0] = '\0';  // Ensure cmd is an empty string
+        for (int i = 3; i < argc; i++) {
+            strcat(cmd, argv[i]);
+            if (i < argc - 1) {
+                strcat(cmd, " ");  // Add a space separator between arguments
+            }
+        }
+        
         printf("\n");
         printf("start: %ld\n", start);
         printf("period: %d\n", period);
         printf("cmd: %s\n", cmd);
-        printf("args: ");
-        for (int i = 0; i < argc - 4; i++) {
-            printf("%s ", args[i]);
-        }
+        
         printf("\n\n");
-
-        printf("passed3\n");
 
         printf("\n\n");
         if (period == 0) {
             if (argv[1][0] == '+') {
                 if (start == 0) {
-                    printf("On souhaite exécuter %s %s à partir de maintenant\n", cmd, args[0]);
+                    printf("On souhaite exécuter %s à partir de maintenant\n", cmd);
                     printf("La commande ne sera exécutée qu'une seule fois\n");
                 }else {
-                    printf("On souhaite exécuter %s %s en commencant dans %ld secondes\n", cmd, args[0], start);
+                    printf("On souhaite exécuter %s en commencant dans %ld secondes\n", cmd, start);
                     printf("La commande ne sera exécutée qu'une seule fois\n");
                 }
             }else {
@@ -141,15 +155,15 @@ void send_command(int argc, char *argv[]) {
                     fprintf(stderr, "strftime failed\n");
                     exit(1);
                 }
-                printf("On souhaite exécuter %s %s le %s\n", cmd, args[0], buf);
+                printf("On souhaite exécuter %s le %s\n", cmd, buf);
                 printf("La commande ne sera exécutée qu'une seule fois\n");
             }
         } else {
             if (argv[1][0] == '+') {
                 if (start == 0) {
-                    printf("On souhaite exécuter %s %s toutes les %d secondes à partir de maintenant\n", cmd, args[0], period);
+                    printf("On souhaite exécuter %s toutes les %d secondes à partir de maintenant\n", cmd, period);
                 }else {
-                    printf("On souhaite exécuter %s %s toutes les %d secondes en commençant dans %ld secondes\n", cmd, args[0], period, start);
+                    printf("On souhaite exécuter %s toutes les %d secondes en commençant dans %ld secondes\n", cmd, period, start);
                 }
             }else {
                 struct tm *tm = localtime(&start);
@@ -162,12 +176,10 @@ void send_command(int argc, char *argv[]) {
                     fprintf(stderr, "strftime failed\n");
                     exit(1);
                 }
-                printf("On souhaite exécuter %s %s toutes les %d secondes en commençant le %s\n", cmd, args[0], period, buf);
+                printf("On souhaite exécuter %s toutes les %d secondes en commençant le %s\n", cmd, period, buf);
             }
         }
         printf("\n\n");
-
-        printf("passed4\n");
 
         // Envoyer les informations nécessaires (date de départ, période, commande avec ses arguments) via le tube nommé /tmp/tasks.fifo
         // Utiliser les fonctions de libmessage.so pour envoyer les informations (send_string, send_argv, recv_string, recv_argv).
@@ -184,21 +196,17 @@ void send_command(int argc, char *argv[]) {
             perror("send_string");
             exit(1);
         }
-        if (send_argv(fd, argv + 3) == -1) {
-            perror("send_argv");
+        if (send_string(fd, cmd) == -1) {
+            perror("send_string");
             exit(1);
         }
-
-        printf("passed5\n");
-    } else {
+        close(fd);
+        free(cmd);
+    }else {
         print_usage(argv[0]);
         exit(1);
     }
 }
-
-
-
-
 
 int main(int argc, char *argv[]) {
     // tester si un processus est en train d’exécuter taskd
